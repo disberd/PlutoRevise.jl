@@ -1,0 +1,15 @@
+name = "PlutoRevise"
+uuid = "d21d77ff-2495-4194-bdcf-4286a08d4d8f"
+version = "0.1.0"
+authors = ["Alberto Mengali <disberd@gmail.com>"]
+
+[deps]
+AbstractPlutoDingetjes = "6e696c72-6542-2067-7265-42206c756150"
+HypertextLiteral = "ac1192a8-f4b3-4bfe-ba22-af5b92cd3ab2"
+Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
+
+[compat]
+AbstractPlutoDingetjes = "1.3.2"
+HypertextLiteral = "0.9.5"
+Revise = "3.13"
+julia = "1.12"

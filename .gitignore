@@ -1,0 +1,7 @@
+Manifest.toml
+coverage/
+downloads/
+assets/
+docs/build/
+/test_*.jl
+/.vscode/

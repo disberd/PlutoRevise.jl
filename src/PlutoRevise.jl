@@ -153,6 +153,17 @@ module PlutoRevise
         return isempty(pkgname) ? keys(proj_toml["deps"]) : [pkgname, keys(proj_toml["deps"])...]
     end
 
+    function force_cell_rerun(cell_id::Base.UUID; soft = false)
+        if !soft # We do a hard rerun, also recomputing macro expansion
+            pop!(Main.PlutoRunner.cell_expanded_exprs, cell_id) # We remove the cached expanded expr
+            computer = pop!(Main.PlutoRunner.computers, cell_id, nothing) # We try removing the computer for this cell if present
+            if !isnothing(computer) # We also do some cleanup if we had a computer
+                Main.PlutoRunner.UseEffectCleanups.trigger_cleanup(cell_id)
+                Base.delete_method(methods(computer.f) |> only) # Make the computer function uncallable
+            end
+        end
+        Main.PlutoRunner.rerun_cell_from_notebook(cell_id) # Trigger the re-run
+    end
 
 
 end # module PlutoRevise

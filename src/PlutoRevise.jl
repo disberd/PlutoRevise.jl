@@ -18,11 +18,15 @@ module PlutoRevise
         for pair in Pkg.Types.stdlib_infos()
     ))
     const PKGNAME = ScopedSetting{String}("")
+    const CELL_TO_PACKAGE = Dict{Base.UUID, Module}()
 
     include("import_helpers.jl")
+    include("html_button.jl")
+
+    latest_workspace_count() = return Main.PlutoRunner.moduleworkspace_count[]
 
     function latest_pluto_module()
-        id = Main.PlutoRunner.moduleworkspace_count[]
+        id = latest_workspace_count()
         new_workspace_name = Symbol("workspace#", id)
         getproperty(Main, new_workspace_name)
     end
@@ -187,9 +191,13 @@ module PlutoRevise
         file, uuid = file_uuid(__source__.file)
         parent_pkg, pkg_name = find_parent_package(file)
         project_root(parent_pkg)
+        out = Expr(:block)
         @with PKGNAME => pkg_name begin
-            process_import_statement(ex) |> esc
+            push!(out.args, process_import_statement(ex))
+            push!(out.args, :($CELL_TO_PACKAGE[$(Base.UUID(uuid))] = $(esc(Symbol(pkg_name)))))
+            push!(out.args, :($html_reload_button($uuid; name=$pkg_name)))
         end
+        return out
     end
 
 end # module PlutoRevise

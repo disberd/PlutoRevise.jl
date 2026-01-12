@@ -31,10 +31,6 @@ module PlutoRevise
         getproperty(Main, new_workspace_name)
     end
 
-    macro fromenv(ex)
-        return process_import_statement(ex) |> esc
-    end
-
     is_stdlib(pkg_name::AbstractString) = return haskey(STDLIBS_IDS, pkg_name)
 
     function default_plutorevise_env()
@@ -85,18 +81,32 @@ module PlutoRevise
         end
     end
 
-    # This function will load a package from the PlutoRevise project into the Main._PlutoReviseModules_
-    function load_from_env(pkg_name::Symbol)
-        name_str = String(pkg_name)
+    # This return the loaded modules module and whether the required package is inside it
+    function fastload_from_env(pkg_name::Symbol)
         pm = if isdefined(Main, LOADED_MODULES_NAME)
             getglobal(Main, LOADED_MODULES_NAME)
         else
             Core.eval(Main, :(module $LOADED_MODULES_NAME end))
             invokelatest(getglobal, Main, LOADED_MODULES_NAME)
         end
-        isdefined(pm, pkg_name) && return  # already loaded
-        @info "Trying to load the requested package $name_str"
+        isdefined(pm, pkg_name) && return pm, true # already loaded
+        for mod in values(Base.loaded_modules)
+            if nameof(mod) == pkg_name
+                @eval pm const $pkg_name = $mod
+                return pm, true
+            end
+        end
+        return pm, false
+    end
+
+    # This function will load a package from the PlutoRevise project into the Main._PlutoReviseModules_
+    function load_from_env(pkg_name::Symbol)
+        pm, loaded = fastload_from_env(pkg_name)
+        loaded && return
+        # The package was not already loaded in the session
+        name_str = String(pkg_name)
         manifest_deps = get_manifest_deps()
+        @info "Trying to load the requested package $name_str"
         if is_stdlib(name_str)
             id = STDLIBS_IDS[name_str]
             @eval pm import $pkg_name
@@ -105,17 +115,14 @@ module PlutoRevise
                 throw(ArgumentError("Package $name_str is not a stdlib nor a dependency of the custom environment"))
             end
             id = info.id
-            if haskey(Base.loaded_modules, id)
-                mod = Base.loaded_modules[id]
-                @eval pm const $pkg_name = $mod
-            elseif info.direct
+            if info.direct
                 @eval pm import $pkg_name
             else
                 fill_modpaths!(manifest_deps)
                 error("The package $name_str is not loaded in the current Julia session.")
             end
         end
-        invokelatest(getproperty, pm, pkg_name)
+        return
     end
 
     function get_manifest_deps(proj_dir::AbstractString = project_root())
@@ -193,9 +200,12 @@ module PlutoRevise
         project_root(parent_pkg)
         out = Expr(:block)
         @with PKGNAME => pkg_name begin
-            push!(out.args, process_import_statement(ex))
-            push!(out.args, :($CELL_TO_PACKAGE[$(Base.UUID(uuid))] = $(esc(Symbol(pkg_name)))))
-            push!(out.args, :($html_reload_button($uuid; name=$pkg_name)))
+            main_block, prerun = process_import_statement(ex)
+            push!(out.args, main_block)
+            if !prerun
+                push!(out.args, :($CELL_TO_PACKAGE[$(Base.UUID(uuid))] = $(esc(Symbol(pkg_name)))))
+                push!(out.args, :($html_reload_button($uuid; name=$pkg_name)))
+            end
         end
         return out
     end

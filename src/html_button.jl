@@ -11,9 +11,14 @@ function inner_reload_function(input)
     return true
 end
 
-function invalidate(args...)
-    @info "invalidating"
-    true
+# Return the function that must be called with `with_js_link`
+function temp_load_function(modnames, manifest_deps = get_manifest_deps())
+    by(modname) = manifest_deps[String(modname)].direct ? 0 : 1
+    sorted_modnames = sort(collect(modnames); by)
+    f(args...) = for modname in sorted_modnames
+        load_from_env(modname)
+    end
+    return f
 end
 
 function html_reload_button(cell_id; name)
@@ -92,25 +97,58 @@ function html_reload_button(cell_id; name)
     """)
 end
 
-macro testreload()
-    r = rand()
-    @htl("""
-    <div>
-        <div>$r</div>
-        <div>$(rand())</div>
-        <script>
-            const cell = currentScript.closest('pluto-cell');
-            const actions = cell._internal_pluto_actions
+function html_loading_button(link_func::Function)
+    text_content = "Loading Packages"
+    out = @htl("""
+    <reload-container>
+    <style>
+        reload-container:before {
+            content: "$text_content";
+        }
+        reload-container {
+            height: 20px;
+            position: fixed;
+            top: 40px;
+            right: 10px;
+            margin-top: 5px;
+            padding-right: 5px;
+            z-index: 200;
+            background: var(--overlay-button-bg);
+            padding: 5px 8px;
+            border: 3px solid var(--overlay-button-border);
+            border-radius: 12px;
+            height: 35px;
+            font-family: "Segoe UI Emoji", "Roboto Mono", monospace;
+            font-size: 0.75rem;
+            visibility: visible;
+        }
 
-            const julia_function = $(with_js_link(inner_reload_function, invalidate))
+        reload-container.PlutoRevise {
+            right: auto;
+            left: 10px;
+        }
 
-            const parent = currentScript.parentElement;
-            parent.addEventListener('click', async (event) => {
-                console.log('clicked testreload')
-                actions.set_and_run_multiple([cell.id]);
-            });
+        reload-container.errored {
+            border-color: var(--error-cell-color);
+        }
+        reload-container:hover {
+            font-weight: 800;
+            cursor: pointer;
+        }
+        body.disable_ui reload-container {
+            display: none;
+        }
+    </style>
+    <script>
+        const cell = currentScript.closest('pluto-cell');
+        const actions = cell._internal_pluto_actions
+        const julia_function = $(with_js_link(link_func))
 
-        </script>
-    </div>
+        console.log("Triggering loading")
+        await julia_function()
+
+        actions.set_and_run_multiple([cell.id])
+    </script>
+    </reload-container>
     """)
 end

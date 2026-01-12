@@ -102,33 +102,50 @@ end
 
 function isimported(modname::Symbol)
     modname === :Main && return true
-    isdefined(Main, LOADED_MODULES_NAME) || return false
-    pm = getglobal(Main, LOADED_MODULES_NAME)
-    return isdefined(pm, modname)
+    _, loaded = fastload_from_env(modname)
+    return loaded
+end
+
+
+function process_import_statement!(outs, ex::Expr, calling_module = latest_pluto_module(); prerun = nothing)
+    (; modnames, exprs) = outs
+    prerun = @something prerun any(!isimported, modnames)
+    for isd in iterate_imports(ex)
+        root = process_modpath!(isd)
+        push!(modnames, root)
+        prerun = prerun || !isimported(root)
+        if !prerun
+            ex = complete_imported_names!(isd, calling_module)
+            push!(exprs, ex)
+        end
+    end
+    return prerun
 end
 
 # This function will generate an importa statement by expanding the modname_path to the correct path based on the provided `starting_module`. It will also expand imported names if a catchall expression is found
 function process_import_statement(ex::Expr, calling_module = latest_pluto_module())
     # Extract the import statement data
     block = quote end
-    modnames = Symbol[]
+    modnames = Set{Symbol}()
     exprs = Expr[]
-    for isd in iterate_imports(ex)
-        root = process_modpath!(isd)
-        root in modnames || push!(modnames, root)
-        if all(isimported, modnames)
-            ex = complete_imported_names!(isd, calling_module)
-            push!(exprs, ex)
+    outs = (; modnames, exprs)
+    prerun = false
+    if Meta.isexpr(ex, :block)
+        for subex in ex.args
+            subex isa Expr || continue
+            prerun = process_import_statement!(outs, subex, calling_module; prerun)
         end
-    end
-    if all(isimported, modnames)
-        copy!(block.args, exprs)
     else
-        for modname in modnames
-            push!(block.args, :($load_from_env($(QuoteNode(modname)))))
-        end
+        prerun = process_import_statement!(outs, ex, calling_module; prerun)
     end
-    return block
+    if prerun
+        # We just put the loading button
+        link_func = temp_load_function(modnames)
+        push!(block.args, :($html_loading_button($link_func)))
+    else
+        copy!(block.args, exprs)
+    end
+    return block, prerun
 end
 
 function process_modpath!(mwn::ModuleWithNames)

@@ -18,29 +18,43 @@ module PlutoRevise
         for pair in Pkg.Types.stdlib_infos()
     ))
 
-    is_stdlib(pkg_name::AbstractString) = return haskey(STDLIBS_IDS, pkg_name)
+    include("import_helpers.jl")
 
-    function get_project_root()
-        if !isassigned(PROJECT_ROOT)
-            active_proj = Base.active_project()
-            contains(active_proj, "c3e4b0f8-55cb-11ea-2926-15256bba5781/pkg_envs") || error("The PlutoRevise package requires a notebook handled by PlutoPkg and with a Pluto version greater than 0.20.18")
-            PROJECT_ROOT[] = joinpath(dirname(active_proj), "plutorevise_env")
-        end
-        return PROJECT_ROOT[]
+    function latest_pluto_module()
+        id = Main.PlutoRunner.moduleworkspace_count[]
+        new_workspace_name = Symbol("workspace#", id)
+        getproperty(Main, new_workspace_name)
     end
 
-    function check_loadpath()
-        proj = get_project_root()
-        proj in LOAD_PATH || push!(LOAD_PATH, proj)
-        return nothing
+    macro fromenv(ex)
+        return process_import_statement(ex) |> esc
+    end
+
+    is_stdlib(pkg_name::AbstractString) = return haskey(STDLIBS_IDS, pkg_name)
+
+    function default_plutorevise_env()
+        active_proj = Base.active_project()
+        contains(active_proj, "c3e4b0f8-55cb-11ea-2926-15256bba5781/pkg_envs") || error("The default PlutoRevise environment requires a notebook handled by PlutoPkg and with a Pluto version greater than 0.20.18")
+        joinpath(dirname(active_proj), "plutorevise_env")
+    end
+
+    project_root() = return isassigned(PROJECT_ROOT) ? PROJECT_ROOT[] : project_root(default_plutorevise_env())
+
+    function project_root(new_env::String)
+        if isassigned(PROJECT_ROOT) && PROJECT_ROOT[] != new_env
+            old_env = PROJECT_ROOT[]
+            li = findfirst(==(old_env), LOAD_PATH)
+            isnothing(li) || deleteat!(LOAD_PATH, li) # We delete the old
+        end
+        findfirst(==(new_env), LOAD_PATH) === nothing && push!(LOAD_PATH, new_env)
+        return PROJECT_ROOT[] = new_env
     end
 
     function on_project(f; io = DEFAULT_IO[])
         current_project = Base.active_project()
         try
-            Pkg.activate(get_project_root(); io)
+            Pkg.activate(project_root(); io)
             f()
-            check_loadpath()
         finally
             Pkg.activate(current_project; io)
         end
@@ -49,6 +63,20 @@ module PlutoRevise
     function develop(path::AbstractString; kwargs...)
         on_project() do
             Pkg.develop(;path, io = DEFAULT_IO[], kwargs...)
+        end
+    end
+
+    macro imp(pkg_name::Symbol)
+        quote
+            $load_from_env($(QuoteNode(pkg_name)))
+            import Main.$(LOADED_MODULES_NAME).$(pkg_name)
+        end
+    end
+
+    macro use(pkg_name::Symbol)
+        quote
+            $load_from_env($(QuoteNode(pkg_name)))
+            using Main.$(LOADED_MODULES_NAME).$(pkg_name)
         end
     end
 
@@ -62,6 +90,7 @@ module PlutoRevise
             invokelatest(getglobal, Main, LOADED_MODULES_NAME)
         end
         isdefined(pm, pkg_name) && return  # already loaded
+        @info "Trying to load the requested package $name_str"
         manifest_deps = get_manifest_deps()
         if is_stdlib(name_str)
             id = STDLIBS_IDS[name_str]
@@ -78,13 +107,13 @@ module PlutoRevise
                 @eval pm import $pkg_name
             else
                 fill_modpaths!(manifest_deps)
-                error("The package $name_str is not loaded in the current Julia session.\nTry loading the direct dependency `$(first(info.modpath))` that includes it in the manifest.")
+                error("The package $name_str is not loaded in the current Julia session.")
             end
         end
         invokelatest(getproperty, pm, pkg_name)
     end
 
-    function get_manifest_deps(proj_dir::AbstractString = get_project_root())
+    function get_manifest_deps(proj_dir::AbstractString = project_root())
         manifest_file = joinpath(proj_dir, "Manifest.toml")
         toml = TOML.parsefile(manifest_file)
         deps = Dict{String, Any}()
@@ -92,7 +121,7 @@ module PlutoRevise
         for (key, value) in toml["deps"]
             dict = first(value)
             uuid = Base.UUID(dict["uuid"])
-            version = VersionNumber(dict["version"])
+            version = VersionNumber(get(dict,"version", "0"))
             id = Base.PkgId(uuid, key)
             stdlib = haskey(STDLIBS_IDS, key)
             name = key
@@ -117,10 +146,11 @@ module PlutoRevise
         return dict
     end
 
-    function get_direct_deps(proj_dir::AbstractString = get_project_root())
+    function get_direct_deps(proj_dir::AbstractString = project_root())
         proj_file = joinpath(proj_dir, "Project.toml")
         proj_toml = TOML.parsefile(proj_file)
-        return keys(proj_toml["deps"])
+        pkgname = get(proj_toml, "name", "")
+        return isempty(pkgname) ? keys(proj_toml["deps"]) : [pkgname, keys(proj_toml["deps"])...]
     end
 
 

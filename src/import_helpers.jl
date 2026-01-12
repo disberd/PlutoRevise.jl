@@ -133,8 +133,15 @@ end
 
 function process_modpath!(mwn::ModuleWithNames)
     path = mwn.modname.original
-    root = first(path)
-    root === :Main || pushfirst!(path, :Main, LOADED_MODULES_NAME)
+    root = popfirst!(path)
+    root === :_ || error("All import statements must start with `_`")
+    if isempty(path)
+        pkgname = PKGNAME[]
+        isempty(pkgname) && error("You can't simply use `_` on an environment that is not a package")
+        pushfirst!(path, Symbol(pkgname))
+    end
+    root = first(path) # We now extract the useful name of the first module
+    pushfirst!(path, :Main, LOADED_MODULES_NAME)
     return root
 end
 

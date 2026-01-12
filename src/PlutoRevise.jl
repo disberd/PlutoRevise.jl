@@ -6,7 +6,7 @@ module PlutoRevise
     import Pkg
     import TOML
     using AbstractPlutoDingetjes.Display: Display, with_js_link, published_to_js
-    using ScopedSettings
+    using ScopedSettings: ScopedSettings, ScopedSetting, @with, with
 
     const DEFAULT_IO = ScopedSetting{IO}(devnull)
     const PROJECT_ROOT = Ref{String}()
@@ -17,6 +17,7 @@ module PlutoRevise
         end
         for pair in Pkg.Types.stdlib_infos()
     ))
+    const PKGNAME = ScopedSetting{String}("")
 
     include("import_helpers.jl")
 
@@ -164,6 +165,31 @@ module PlutoRevise
         end
         Main.PlutoRunner.rerun_cell_from_notebook(cell_id) # Trigger the re-run
     end
+    force_cell_rerun(uuid::String) = force_cell_rerun(Base.UUID(uuid))
 
+    function file_uuid(plutopath::String)
+        out = split(plutopath, "#==#")
+        length(out) == 1 && return first(out), ""
+        return out[1], out[2]
+    end
+    file_uuid(plutopath::Symbol) = file_uuid(String(plutopath))
+
+
+    function find_parent_package(path::AbstractString)
+        proj = Base.current_project(path)
+        env = dirname(proj)
+        toml = TOML.parsefile(proj)
+        haskey(toml, "name") || error("The closest parent enviroment $(env) is not a package")
+        return env, toml["name"]
+    end
+
+    macro fromparent(ex)
+        file, uuid = file_uuid(__source__.file)
+        parent_pkg, pkg_name = find_parent_package(file)
+        project_root(parent_pkg)
+        @with PKGNAME => pkg_name begin
+            process_import_statement(ex) |> esc
+        end
+    end
 
 end # module PlutoRevise

@@ -88,13 +88,13 @@ function iterate_imports(jm::JustModules)
 end
 iterate_imports(ex::Expr) = extract_import_data(ex) |> iterate_imports
 
-function filterednames_filter_func(caller_module)
+function filterednames_filter_func(caller_module, previous_exported = Set{Symbol}())
     excluded = (:eval, :include, :__init__)
     f(s)::Bool =
-        let excluded = excluded, caller_module = caller_module
+        let excluded = excluded, caller_module = caller_module, previous_exported = previous_exported
             Base.isgensym(s) && return false
             s in excluded && return false
-            isdefined(caller_module, s) && return which(caller_module, s) ∉ (Base, Core, Main)
+            isdefined(caller_module, s) && return s in previous_exported
             return true
         end
     return f
@@ -129,14 +129,16 @@ function process_import_statement(ex::Expr, calling_module = latest_pluto_module
     modnames = Set{Symbol}()
     exprs = Expr[]
     outs = (; modnames, exprs)
+    exported_names = Set{Symbol}()
     prerun = false
-    if Meta.isexpr(ex, :block)
+    if !Meta.isexpr(ex, :block)
+        ex = Expr(:block, ex) # We enforce a block structure
+    end
+    @with EXPORTED_NAMES => exported_names begin
         for subex in ex.args
             subex isa Expr || continue
             prerun = process_import_statement!(outs, subex, calling_module; prerun)
         end
-    else
-        prerun = process_import_statement!(outs, ex, calling_module; prerun)
     end
     if prerun
         # We just put the loading button
@@ -144,6 +146,11 @@ function process_import_statement(ex::Expr, calling_module = latest_pluto_module
         push!(block.args, :($html_loading_button($link_func)))
     else
         copy!(block.args, exprs)
+        pkg_name = PKGNAME[]
+        uuid = CELL_UNDER_PROCESSING[]
+        push!(block.args, :($CELL_TO_PACKAGE[$(uuid)] = $(esc(Symbol(pkg_name)))))
+        push!(block.args, :($CELL_TO_SYMBOLS[$(uuid)] = $(exported_names)))
+        push!(block.args, :($html_reload_button($(uuid); name=$pkg_name)))
     end
     return block, prerun
 end
@@ -208,12 +215,17 @@ function complete_imported_names!(mwn::ModuleWithNames, calling_module = latest_
         end
     # end
     # We have to filter the imported names to exclude ones that are already defined in the caller
-    filter_func = filterednames_filter_func(calling_module)
+    exported_names = EXPORTED_NAMES[]
+    uuid = CELL_UNDER_PROCESSING[]
+    previous_exported = get(CELL_TO_SYMBOLS, uuid, Set{Symbol}())
+    filter_func = filterednames_filter_func(calling_module, previous_exported)
     filter!(mwn.imported) do import_as
         as = import_as.as
         imported_name = something(as, last(import_as.original))
-        isdefined(m, imported_name) || return false
-        return filter_func(imported_name)
+        isdefined(m, imported_name) || return false # Skip outdated `export` statements
+        should_export = filter_func(imported_name)
+        should_export && push!(exported_names, imported_name)
+        return should_export
     end
     # The list of imported names should be empty only when inner=false
     ex = reconstruct_import_statement(mwn; head=:import)

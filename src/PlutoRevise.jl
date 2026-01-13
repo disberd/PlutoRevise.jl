@@ -7,6 +7,9 @@ module PlutoRevise
     import TOML
     using AbstractPlutoDingetjes.Display: Display, with_js_link, published_to_js
     using ScopedSettings: ScopedSettings, ScopedSetting, @with, with
+    using ScopedValues: ScopedValues, ScopedValue
+
+    export @fromparent
 
     const DEFAULT_IO = ScopedSetting{IO}(devnull)
     const PROJECT_ROOT = Ref{String}()
@@ -18,7 +21,10 @@ module PlutoRevise
         for pair in Pkg.Types.stdlib_infos()
     ))
     const PKGNAME = ScopedSetting{String}("")
+    const EXPORTED_NAMES = ScopedValue{Set{Symbol}}()
+    const CELL_UNDER_PROCESSING = ScopedValue{Base.UUID}()
     const CELL_TO_PACKAGE = Dict{Base.UUID, Module}()
+    const CELL_TO_SYMBOLS = Dict{Base.UUID, Set{Symbol}}()
 
     include("import_helpers.jl")
     include("html_button.jl")
@@ -199,13 +205,9 @@ module PlutoRevise
         parent_pkg, pkg_name = find_parent_package(file)
         project_root(parent_pkg)
         out = Expr(:block)
-        @with PKGNAME => pkg_name begin
+        @with PKGNAME => pkg_name CELL_UNDER_PROCESSING => Base.UUID(uuid) begin
             main_block, prerun = process_import_statement(ex)
             push!(out.args, main_block)
-            if !prerun
-                push!(out.args, :($CELL_TO_PACKAGE[$(Base.UUID(uuid))] = $(esc(Symbol(pkg_name)))))
-                push!(out.args, :($html_reload_button($uuid; name=$pkg_name)))
-            end
         end
         return out
     end

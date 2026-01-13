@@ -81,6 +81,10 @@ function extract_import_data(ex::Expr)
     return id
 end
 
+is_catchall(ia::ImportAs) = length(ia.original) == 1 && first(ia.original) === :*
+is_catchall(v::Vector{ImportAs}) = length(v) === 1 && is_catchall(first(v))
+is_catchall(mwn::ModuleWithNames) = any(is_catchall, (mwn.imported, mwn.modname))
+
 iterate_imports(mwn::ModuleWithNames) = [mwn]
 function iterate_imports(jm::JustModules)
     f(modname::ImportAs) = ModuleWithNames(jm.head, modname, Symbol[])
@@ -158,11 +162,23 @@ end
 function process_modpath!(mwn::ModuleWithNames)
     path = mwn.modname.original
     root = popfirst!(path)
-    root === :_ || error("All import statements must start with `_`")
-    if isempty(path)
-        pkgname = PKGNAME[]
-        isempty(pkgname) && error("You can't simply use `_` on an environment that is not a package")
-        pushfirst!(path, Symbol(pkgname))
+    pkg_name = PKGNAME[]
+    ispkg = !isempty(pkg_name)
+    nonpkg_error(root) = error("You can only use the `$root` import statement when the custom environment is a package environment.")
+    if root == :^
+        ispkg || nonpkg_error(root)
+        pushfirst!(path, Symbol(pkg_name))
+    elseif root === :>
+        # Do nothing as the format is already correct
+    elseif root === :*
+        # Here we simply substitute the path of the current module, and :* to the imported names
+        imported = mwn.imported
+        @assert isempty(imported) "You can't use the catchall import statement `import *` with explicitly imported names"
+        ispkg || nonpkg_error(root)
+        pushfirst!(path, Symbol(pkg_name))
+        push!(mwn.imported, ImportAs(:*))
+    else
+        error("The provided import statement is not a valid input for the @frompackage macro.\nIf you want to import from a dependency of the target package, prepend `>.` in front of the package name, e.g. `using >.BenchmarkTools`.")
     end
     root = first(path) # We now extract the useful name of the first module
     pushfirst!(path, :Main, LOADED_MODULES_NAME)
@@ -186,34 +202,33 @@ end
 
 # This will modify the import statements provided as input to `@frompackage` by updating the modname_path and eventually extracting exported names from the module and explicitly import them. It will also transform each statement into using explicit imported names (even for simple imports) are import/using without explicit names are currently somehow broken in Pluto if not handled by the PkgManager
 function complete_imported_names!(mwn::ModuleWithNames, calling_module = latest_pluto_module())::Expr
-    if !isempty(mwn.imported)
+    catchall = is_catchall(mwn)
+    if !(isempty(mwn.imported) || catchall)
         # If we already have an explicit list of imports, we do not modify and simply return the corresponding expression
         # Here we do not modify the list of explicitily imported names, as it's better to get an error if you explicitly import something that was already defined in the notebook
         return reconstruct_import_statement(mwn; head=:import)
     end
     nested_path = mwn.modname.original
     m = extract_nested_module(Main, nested_path)
-    # if catchall
-    #     # We extract all the names, potentially include usings encountered
-    #     return catchall_import_expression!(mwn, p, m; exclude_usings)
-    # else
-        if mwn.head === :import
-            # We explicitly import the module itself
-            modname = mwn.modname
-            import_as = ImportAs(nameof(m))
-            as = modname.as
-            if as !== nothing
-                # We remove the `as` from the module name expression
-                modname.as = nothing
-                # We add it to the imported name
-                import_as.as = as
-            end
-            push!(mwn.imported, import_as)
-        else
-            # We export the names exported by the module
-            mwn.imported = names(m) .|> ImportAs
+    if catchall
+        # We extract all the names, potentially include usings encountered
+        mwn.imported = names(m; all=true, imported=true, usings=true) .|> ImportAs
+    elseif mwn.head === :import
+        # We explicitly import the module itself
+        modname = mwn.modname
+        import_as = ImportAs(nameof(m))
+        as = modname.as
+        if as !== nothing
+            # We remove the `as` from the module name expression
+            modname.as = nothing
+            # We add it to the imported name
+            import_as.as = as
         end
-    # end
+        push!(mwn.imported, import_as)
+    else
+        # We export the names exported by the module
+        mwn.imported = names(m) .|> ImportAs
+    end
     # We have to filter the imported names to exclude ones that are already defined in the caller
     exported_names = EXPORTED_NAMES[]
     uuid = CELL_UNDER_PROCESSING[]

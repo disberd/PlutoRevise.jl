@@ -112,7 +112,7 @@ module PlutoRevise
         # The package was not already loaded in the session
         name_str = String(pkg_name)
         manifest_deps = get_manifest_deps()
-        @info "Trying to load the requested package $name_str"
+        @info "Trying to load the requested package $name_str.\nThis operation can take quite some time, if you see this message below the cell it means that the package is still loading and you should not manually rerun this cell."
         if is_stdlib(name_str)
             id = STDLIBS_IDS[name_str]
             @eval pm import $pkg_name
